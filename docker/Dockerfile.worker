@@ -1,0 +1,23 @@
+# DemoPilot Dedicated Background Worker Dockerfile
+# Equipped with Playwright Chromium, FFmpeg 6+, and BullMQ runner
+
+FROM mcr.microsoft.com/playwright:v1.48.2-jammy
+
+WORKDIR /app
+
+# Install FFmpeg and audio decoders
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libmp3lame-dev \
+    libx264-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+CMD ["npm", "run", "dev"]

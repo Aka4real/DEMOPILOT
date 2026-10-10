@@ -1,0 +1,391 @@
+// DemoPilot Master Prisma Schema
+// Strict multi-tenancy, complete auditability, and evidence grounding
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ProjectStatus {
+  DRAFT
+  ANALYZING
+  READY
+  GENERATING
+  REVIEW
+  PUBLISHED
+  FAILED
+  ARCHIVED
+}
+
+enum JobType {
+  WEBSITE_ANALYSIS
+  DEMO_PLANNING
+  BROWSER_RECORDING
+  NARRATION_SYNTHESIS
+  VIDEO_RENDERING
+  VERIFICATION
+}
+
+enum JobStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ActionType {
+  OPEN_URL
+  NAVIGATE
+  CLICK
+  HOVER
+  TYPE
+  SCROLL
+  SELECT
+  WAIT
+  SCREENSHOT
+}
+
+model Organization {
+  id            String               @id @default(uuid())
+  slug          String               @unique
+  name          String
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  members       OrganizationMember[]
+  projects      Project[]
+  subscriptions Subscription[]
+  apiKeys       ApiKey[]
+  usageEvents   UsageEvent[]
+  auditLogs     AuditLog[]
+}
+
+model User {
+  id          String               @id @default(uuid())
+  email       String               @unique
+  name        String?
+  avatarUrl   String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  memberships OrganizationMember[]
+  auditLogs   AuditLog[]
+}
+
+model OrganizationMember {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           OrgRole      @default(MEMBER)
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+}
+
+model Project {
+  id                String             @id @default(uuid())
+  organizationId    String
+  name              String
+  targetUrl         String
+  status            ProjectStatus      @default(DRAFT)
+  objective         String             @default("product_overview")
+  presentationStyle String             @default("concise")
+  voiceStyle        String             @default("professional")
+  interactiveSlug   String?            @unique
+  videoUrl          String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection        WebsiteConnection?
+  productModel      ProductModel?
+  demoPlans         DemoPlan[]
+  interactiveDemo   InteractiveDemo?
+  videoRenders      VideoRender[]
+  generationJobs    GenerationJob[]
+
+  @@index([organizationId, status])
+}
+
+model WebsiteConnection {
+  id             String        @id @default(uuid())
+  projectId      String        @unique
+  baseUrl        String
+  isPrivate      Boolean       @default(false)
+  authType       String?       // NONE, BASIC, COOKIE, FORM
+  encryptedCreds String?       // AES-256-GCM encrypted payload
+  lastCheckedAt  DateTime?
+  createdAt      DateTime      @default(now())
+
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pages          WebsitePage[]
+}
+
+model WebsitePage {
+  id              String            @id @default(uuid())
+  connectionId    String
+  path            String
+  url             String
+  title           String?
+  metaDescription String?
+  screenshotUrl   String?
+  discoveredAt    DateTime          @default(now())
+
+  connection      WebsiteConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  elements        WebsiteElement[]
+  evidenceItems   EvidenceItem[]
+
+  @@unique([connectionId, path])
+}
+
+model WebsiteElement {
+  id            String         @id @default(uuid())
+  pageId        String
+  selector      String
+  tagName       String
+  text          String?
+  role          String?
+  testId        String?
+  boundingBox   Json?
+  attributes    Json?
+
+  page          WebsitePage    @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  evidenceItems EvidenceItem[]
+}
+
+model ProductModel {
+  id              String         @id @default(uuid())
+  projectId       String         @unique
+  productName     String
+  tagline         String?
+  summary         String
+  primaryAudience Json           // string[]
+  keyFeatures     Json           // { id, title, description, evidenceRef }[]
+  suggestedFlows  Json           // { id, name, steps }[]
+  createdAt       DateTime       @default(now())
+
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  evidenceItems   EvidenceItem[]
+}
+
+model EvidenceItem {
+  id             String          @id @default(uuid())
+  productModelId String?
+  pageId         String?
+  elementId      String?
+  claim          String
+  pageUrl        String
+  pagePath       String
+  elementSelector String?
+  elementText    String?
+  domSnippet     String?
+  screenshotUrl  String?
+  confidenceScore Float          @default(0.95)
+  interactionLog Json?
+  verifiedAt     DateTime        @default(now())
+
+  productModel   ProductModel?   @relation(fields: [productModelId], references: [id], onDelete: Cascade)
+  page           WebsitePage?    @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  element        WebsiteElement? @relation(fields: [elementId], references: [id], onDelete: SetNull)
+  scenes         DemoScene[]
+}
+
+model DemoPlan {
+  id                  String      @id @default(uuid())
+  projectId           String
+  version             Int         @default(1)
+  objective           String
+  presentationStyle   String      @default("concise")
+  voiceStyle          String      @default("professional")
+  estimatedDurationSec Float       @default(30.0)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  project             Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenes              DemoScene[]
+}
+
+model DemoScene {
+  id                String           @id @default(uuid())
+  planId            String
+  orderIndex        Int
+  title             String
+  purpose           String
+  pagePath          String
+  viewportWidth     Int              @default(1920)
+  viewportHeight    Int              @default(1080)
+  durationSec       Float            @default(8.0)
+  highlightSelector String?
+  screenshotUrl     String?
+  videoUrl          String?
+  evidenceId        String?
+
+  plan              DemoPlan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  evidence          EvidenceItem?    @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+  actions           DemoAction[]
+  narration         NarrationScript?
+  audioAsset        AudioAsset?
+
+  @@index([planId, orderIndex])
+}
+
+model DemoAction {
+  id             String     @id @default(uuid())
+  sceneId        String
+  orderIndex     Int
+  actionType     ActionType
+  selector       String?
+  value          String?
+  timingOffsetMs Int        @default(0)
+  description    String?
+
+  scene          DemoScene  @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@index([sceneId, orderIndex])
+}
+
+model NarrationScript {
+  id                String    @id @default(uuid())
+  sceneId           String    @unique
+  voice             String
+  text              String
+  ssml              String?
+  charCount         Int
+  durationSec       Float     @default(8.0)
+  verifiedGrounding Boolean   @default(true)
+  status            String    @default("VERIFIED")
+
+  scene             DemoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+}
+
+model AudioAsset {
+  id           String    @id @default(uuid())
+  sceneId      String    @unique
+  storagePath  String
+  format       String    @default("audio/mp3")
+  durationMs   Int
+  waveformJson Json?
+  createdAt    DateTime  @default(now())
+
+  scene        DemoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+}
+
+model InteractiveDemo {
+  id           String    @id @default(uuid())
+  projectId    String    @unique
+  slug         String    @unique
+  productName  String
+  targetUrl    String
+  isPublic     Boolean   @default(true)
+  viewCount    Int       @default(0)
+  demoManifest Json
+  publishedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model VideoRender {
+  id            String    @id @default(uuid())
+  projectId     String
+  resolution    String    @default("1080p")
+  aspectRatio   String    @default("16:9")
+  storagePath   String?
+  durationSec   Float?
+  fileSizeBytes BigInt?
+  status        JobStatus @default(PENDING)
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model GenerationJob {
+  id           String     @id @default(uuid())
+  projectId    String
+  jobType      JobType
+  status       JobStatus  @default(PENDING)
+  progressPct  Int        @default(0)
+  currentStage String     @default("queued")
+  errorMessage String?
+  errorDetails Json?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime   @default(now())
+
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events       JobEvent[]
+}
+
+model JobEvent {
+  id        String        @id @default(uuid())
+  jobId     String
+  stage     String
+  message   String
+  timestamp DateTime      @default(now())
+
+  job       GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model UsageEvent {
+  id             String       @id @default(uuid())
+  organizationId String
+  eventType      String       // GEMINI_TOKENS, TTS_CHARS, BROWSER_SECONDS, RENDER_SECONDS
+  quantity       Int
+  timestamp      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id               String       @id @default(uuid())
+  organizationId   String       @unique
+  stripeCustomerId String?
+  stripeSubId      String?
+  tier             String       @default("free") // free, pro, enterprise
+  status           String       @default("active")
+  periodEnd        DateTime?
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id             String       @id @default(uuid())
+  organizationId String
+  keyHash        String       @unique
+  name           String
+  maskedKey      String       @default("dp_live_••••")
+  lastUsedAt     DateTime?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id             String        @id @default(uuid())
+  organizationId String
+  userId         String?
+  action         String
+  resourceType   String
+  resourceId     String
+  metadata       Json?
+  timestamp      DateTime      @default(now())
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+}

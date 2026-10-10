@@ -1,0 +1,45 @@
+# DemoPilot Production Caddyfile
+# Automatic HTTPS via Let's Encrypt, HTTP/3 QUIC, and Zstandard/Gzip compression
+
+{
+    admin off
+    email admin@demopilot.app
+}
+
+# Web application & Interactive Demo Runtime
+{$APP_URL:http://localhost} {
+    encode zstd gzip
+
+    # Strict security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Route /demo/[slug]/embed allowing iframe embedding on third-party sites
+    @embed path /demo/*/embed
+    header @embed {
+        X-Frame-Options "ALLOWALL"
+        Content-Security-Policy "frame-ancestors *"
+    }
+
+    # Reverse proxy to Next.js Web Monolith
+    reverse_proxy web:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# Dedicated S3 / MinIO Object Storage Console & Gateway
+{$MEDIA_URL:http://media.localhost} {
+    encode zstd gzip
+
+    reverse_proxy minio:9000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+    }
+}

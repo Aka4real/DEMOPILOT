@@ -1,0 +1,118 @@
+# DemoPilot Master Production Docker Compose
+# Architecture: Modular Monolith + Dedicated Asynchronous Workers + PostgreSQL + Redis + MinIO + Caddy
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: demopilot_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - APP_URL=${APP_URL:-http://localhost}
+      - MEDIA_URL=${MEDIA_URL:-http://media.localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    container_name: demopilot_web
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-demopilot}:${POSTGRES_PASSWORD:-secure_demopilot_pass_123}@postgres:5432/${POSTGRES_DB:-demopilot_db}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-super-secret-hex-key-minimum-32-chars-long}
+      - STORAGE_PROVIDER=minio
+      - STORAGE_ENDPOINT=http://minio:9000
+      - STORAGE_BUCKET=demopilot-media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    container_name: demopilot_worker
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-demopilot}:${POSTGRES_PASSWORD:-secure_demopilot_pass_123}@postgres:5432/${POSTGRES_DB:-demopilot_db}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
+      - STORAGE_ENDPOINT=http://minio:9000
+      - STORAGE_BUCKET=demopilot-media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: demopilot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-demopilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_demopilot_pass_123}
+      POSTGRES_DB: ${POSTGRES_DB:-demopilot_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-demopilot} -d ${POSTGRES_DB:-demopilot_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: demopilot_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: demopilot_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-demopilot_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-secure_minio_pass_123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9001:9001"
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  redis_data:
+  minio_data:
